@@ -78,10 +78,12 @@ def generate_agents_md():
 
 
 def collect_skill_files():
-    """Collect SKILL.md + all maxscript-*.md reference files."""
+    """Collect SKILL.md + all maxscript-*.md reference files + helper *.mjs scripts."""
     files = [SKILL_SRC]
     for md in sorted(SKILL_DIR.glob("maxscript-*.md")):
         files.append(md)
+    for mjs in sorted(SKILL_DIR.glob("*.mjs")):
+        files.append(mjs)
     return files
 
 

@@ -124,6 +124,13 @@ Debugging:
 - `create_shell_material`: `mcp_findMaterialByName` uses `sceneMaterials` — `getClassInstances Material` is invalid (Material is not a MAXClass).
 - `python -m src.server` runs as `__main__`; alias it to `src.server` before importing tool modules or `from ..server import mcp` creates a second empty FastMCP instance.
 
+## Session Gotchas
+
+- **Units reset with the scene**: `manage_scene reset` / `resetMaxFile` restores the startup units (often mm / Generic). Re-set `units.SystemType`, `DisplayType`, `MetricType` after every reset and before any export.
+- **Bridge never connects on a fresh Max 2026**: a modal "Heads Up! default scene material has changed (OpenPBR)" sits behind the splash and blocks startup. Click **Continue** (tick "Don't show again").
+- **Safe mode is a substring match on the whole command**: `doscommand`, `shelllaunch`, `deletefile`, `python.execute`, `createfile`, `hiddendoscommand` are blocked even inside comments, strings or file paths. Delete or move files outside Max.
+- **Ports**: native bridge = named pipe `\\.\pipe\3dsmax-mcp`; TCP fallback = `127.0.0.1:8765` (keep other local servers off it). `ConnectionError … 8765` also just means Max isn't running, so check the process first.
+
 ## MAXScript Pitfalls
 
 - **No parens with keyword args**: `Box width:10` not `Box() width:10`
@@ -133,12 +140,35 @@ Debugging:
 - **.NET strings**: convert to MAXScript strings before string methods
 - Controller/wire paths: normalize display tokens like `[#Z Position]` to `[#z_position]`
 - TCP fallback is opt-in; prefer the native bridge, and if Max viewport interaction stutters while fallback is running, stop the fallback and use the native bridge path.
+- **"Bad free thunk local member index"**: a `for … collect` passed *directly* as a function argument that reads a local/param fails at runtime. Collect into a local first: `local pts = for … collect …; f pts`.
+- **Negative arguments**: `f p -1.25 2` parses as `f (p - 1.25) 2`. Parenthesise: `f p (-1.25) 2`, `f p (-x)`.
+- **`getPolygonCount` on Editable Poly counts polygons, not triangles** (a 16-sided wheel: 82 vs 188). For triangle budgets use `(snapshotAsMesh o).numfaces`.
+- **`polyop.createPolygon` returns `undefined`** when the new face's winding conflicts with a neighbour. Throw on it and you get a free normal-orientation check.
+- **Probe expressions create nodes**: `(Box()).mapcoords` leaves a real Box in the scene. Inspect existing objects instead.
+- **JSON (Max 2026 / .NET 8)**: no Newtonsoft, and `JsonDocument.Parse`'s optional *struct* arg can't be omitted or `dotNetObject`-constructed. Use `dotNet.loadAssembly "System.Text.Json"`, build the options with `(dotNetClass "System.Activator").CreateInstance ((dotNetClass "System.Type").GetType "System.Text.Json.JsonDocumentOptions, System.Text.Json")`, then call `.Parse txt opts`.
 
 ### OSL
 - Use `write_osl_shader` for file I/O and compilation
 - Use `introspect_osl` before wiring — not `introspect_class` on OSLMap (massive output)
 - Shader function name must match `shader_name`; use unique names (cache reuse)
 - OSLMap lowercases param names
+
+## glTF / Web Export (native `GLTF_Export`, Max 2026)
+
+- **Call**: `exportFile f #noPrompt selectedOnly:true using:GLTF_Export` (`.glb` = binary). `GLTF_Export.GLTFExportOptions` only has `ShellMaterialUseBakedMtl`: no axis, scale or hierarchy options. Each export also writes `<file>.glb.log`; delete it outside Max.
+- **Axes**: glTF (x, y, z) = Max (X, Z, −Y), metres 1:1. A model facing Max **−Y** faces glTF **+Z** (glTF's "front").
+- **Node layout**: every mesh becomes an unnamed wrapper (Z-up→Y-up × world transform) holding the named mesh node with an identity transform; vertices stay in Max local space.
+- **Hierarchy is flattened** (also mesh→mesh, also `selectedOnly:false`). **Helpers (Point/Dummy) are dropped**, so you can't get empty nodes from Max. Rebuild parenting and empties in post or at runtime.
+- **Affect Pivot Only is ignored** (the object offset isn't applied, so the geometry shifts). Prefer native pivots: build into an Editable Poly created at the origin and only set `.pos`. Otherwise bake: read world verts (`polyop.getVert o i node:o`), clear `objectOffsetPos/Rot/Scale`, *then* write them back with `polyop.setVert … node:o`.
+- **UVs only with a textured material**: no `TEXCOORD_0` unless the material has a bitmap (e.g. PhysicalMaterial `base_color_map`).
+- **Colour factors are written raw** (`base_color` / `emit_color` value ÷ 255, not linearised). Linearise in post, or keep colours in an sRGB texture with a white `base_color` (the factor is then omitted).
+- **Emission**: becomes a raw `emissiveFactor` only. `emit_luminance` / kelvin are ignored, and there's no `KHR_materials_emissive_strength`.
+- **Sampler has no mipmaps** (min/mag LINEAR), so set `LINEAR_MIPMAP_LINEAR` in post. **PNGs are re-encoded as RGBA** (opaque alpha added, sRGB chunk dropped; RGB unchanged).
+- **Multi/Sub** gives one primitive per material ID. Material findings were tested with **PhysicalMaterial**; OpenPBR is not verified.
+- **Web pipeline**: scripted build (native pivots) → `exportFile` → gltf-transform post-process (unwrap + bake transforms, rebuild the tree, linearise factors, mipmaps, RGB PNG, dedup/prune) → Khronos `gltf-validator`. npm only has prereleases of the validator, so install it without a version range.
+  - Generic script: `gltf_postprocess.mjs` in this folder.
+  - Tested end to end on a 12-wheel articulated truck asset: scripted build, fixed node tree, validator plus custom checks.
+- **gltf-transform `dedup()` misses identical meshes** when baked data differs only in −0 vs +0 bytes, or in attribute insertion order. Write `c + 0` and re-add attributes in sorted order first (the script does both).
 
 ## MAXScript Reference (bundled)
 
